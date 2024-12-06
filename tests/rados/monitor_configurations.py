@@ -432,7 +432,7 @@ class MonConfigMethods:
 
     def daemon_config_show(self, daemon_type: str, daemon_id: str) -> dict:
         """
-        Fetches the full configuration of the given daemon in a cluster.
+        Fetches the full configuration of the given daemon in cluster.
 
         Args:
             daemon_type (str): Type of daemon (e.g., 'osd', 'mon', 'mgr')

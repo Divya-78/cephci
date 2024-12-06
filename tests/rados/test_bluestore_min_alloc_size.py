@@ -164,11 +164,7 @@ def run(ceph_cluster, **kw):
                 daemon_alloc_size_hdd = json_out["bluestore_min_alloc_size_hdd"]
                 daemon_alloc_size_ssd = json_out["bluestore_min_alloc_size_ssd"]
 
-                if (
-                    not daemon_alloc_size_hdd
-                    == daemon_alloc_size_ssd
-                    == custom_min_alloc_size
-                ):
+                if not daemon_alloc_size_hdd == daemon_alloc_size_ssd == custom_min_alloc_size:
                     log.error(
                         f"min_alloc_size does not match the expected custom value of {custom_min_alloc_size}"
                         f"min_alloc_size_ssd on cluster: {daemon_alloc_size_ssd}"
@@ -289,11 +285,7 @@ def run(ceph_cluster, **kw):
                 daemon_alloc_size_hdd = json_out["bluestore_min_alloc_size_hdd"]
                 daemon_alloc_size_ssd = json_out["bluestore_min_alloc_size_ssd"]
 
-                if (
-                    not daemon_alloc_size_hdd
-                    == daemon_alloc_size_ssd
-                    == default_min_alloc_size
-                ):
+                if not daemon_alloc_size_hdd == daemon_alloc_size_ssd == default_min_alloc_size:
 
                     log.error(
                         f"min_alloc_size does not match the expected custom value of {default_min_alloc_size}"
