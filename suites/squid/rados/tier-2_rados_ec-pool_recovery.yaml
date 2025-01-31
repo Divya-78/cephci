@@ -2,7 +2,7 @@
 # CLuster should have atleast 6 OSD hosts for testing.
 # Suited best for BM pipeline.
 # Can be run on RHOS-d env as well.
-# RHOS-d run duration: 60 mins (clay-ecpool tests) 
+# RHOS-d run duration: 60 mins (clay-ecpool tests)
 # Suite contains ISA erasure code plugin
 
 tests:
@@ -317,7 +317,7 @@ tests:
           - rpool_3
           - ecpool_test_2
 
-Below test is added for ISA erasure code plugin
+  # Below test is added for ISA erasure code plugin
   
   - test:
       name: EC pool with ISA plugin
