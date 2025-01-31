@@ -344,7 +344,7 @@ Below test is added for ISA erasure code plugin
             compression_algorithm: snappy
         delete_pools:
           - test_isa_ec_pool
-      desc: Create, modify & delete ISA EC pools and run IO
+      desc: Creation, modification & deletion of ISA EC pools and run IO
 
   - test:
       name: ISA plugin for EC pool with Overwrites
