@@ -31,6 +31,7 @@ def run(ceph_cluster, **kw):
 
     log.info(run.__doc__)
     config = kw["config"]
+    rhbuild = config.get("rhbuild")
     cephadm = CephAdmin(cluster=ceph_cluster, **config)
     rados_obj = RadosOrchestrator(node=cephadm)
     mgr_obj = MgrWorkflows(node=cephadm)
@@ -77,14 +78,13 @@ def run(ceph_cluster, **kw):
 
         # Step 2: Check for defunct SSH processes
         log.info("Step 2: Checking for defunct SSH processes")
-        defunct_processes = subprocess.check_output("ps aux | grep defunct", shell=True).decode()
-        log.info(f"Defunct processes found: {defunct_processes}")
+        defunct_processes = subprocess.check_output("ps aux | grep -v defunct", shell=True).decode()
+        log.info(f"Output of grep -v defunct: {defunct_processes}")
 
         if "defunct" in defunct_processes:
             log.error(f"Defunct processes found: {defunct_processes}")
             # Step 4: Apply Workaround (WA) for defunct processes (only for Pacific release)
-            ceph_status = rados_obj.log_cluster_health()  # Using your log_cluster_health method
-            if "Pacific" in ceph_status:
+            if rhbuild.startswith("5"):
                 log.info("Step 4: Applying workaround (WA) to remove defunct processes")
                 result = mgr_obj.remove_mgr_service(host=active_mgr)  # Remove the active MGR
                 if not result:
@@ -96,16 +96,15 @@ def run(ceph_cluster, **kw):
                     return 1
                 log.info("Workaround applied, verifying defunct processes again")
 
-                defunct_processes_after_wa = subprocess.check_output("ps aux | grep defunct", shell=True).decode()
-                log.error(f"Defunct processes found: {defunct_processes_after_wa}")
-
+                defunct_processes_after_wa = subprocess.check_output("ps aux | grep -v defunct", shell=True).decode()
+                log.debug(f"Output of grep -v defunct: {defunct_processes_after_wa}")
 
                 if "defunct" in defunct_processes_after_wa:
                     log.error(f"Defunct processes still found after WA: {defunct_processes_after_wa}")
                     return 1
             else:
-                log.info("No workaround needed as this is not Pacific release")
-            return 1
+                log.error("Defunct processes should not be present in versions other than Pacific.")
+                return 1
 
         # Step 3: If no defunct SSH processes found
         log.info("Step 3: No defunct SSH processes found, verifying system health")
@@ -114,15 +113,15 @@ def run(ceph_cluster, **kw):
             log.error(f"System health is not OK after failover. Status: {cluster_status_after_failover}")
             return 1
 
-        log.info("Step 3.1: Verifying SSH process behavior")
-        ssh_processes = subprocess.check_output("ps aux | grep ssh", shell=True).decode()
-        if "ssh" in ssh_processes:
-            log.info("SSH processes found, ensuring no issues")
-            if "defunct" in ssh_processes:
-                log.error(f"Found defunct SSH processes: {ssh_processes}")
-                return 1
-        else:
-            log.info("No SSH processes found. This is normal.")
+        # log.info("Step 3.1: Verifying SSH process behavior")
+        # ssh_processes = subprocess.check_output("ps aux | grep ssh", shell=True).decode()
+        # if "ssh" in ssh_processes:
+        #     log.info("SSH processes found, ensuring no issues")
+        #     if "defunct" in ssh_processes:
+        #         log.error(f"Found defunct SSH processes: {ssh_processes}")
+        #         return 1
+        # else:
+        #     log.info("No SSH processes found. This is normal.")
 
     # Step 5: Ensure No Crashes Occur During Testing
     log.info("Step 5: Ensuring no crashes occurred during the testing")

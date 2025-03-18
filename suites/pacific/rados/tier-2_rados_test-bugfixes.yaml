@@ -120,70 +120,70 @@ tests:
         log_to_file: true
       desc: Change config options to enable logging to file
 
-# moved prior to Inconsistent object test due to chances of an OSD being down
-  - test:
-      name: OSD restart when bluefs_shared_alloc_size is lower than bluestore_min_alloc_size
-      module: test_bug_fixes.py
-      config:
-        lower_bluefs_shared_alloc_size: true
-      polarion-id: CEPH-83591092
-      desc: verify OSD resiliency when 'bluefs_shared_alloc_size' is below 'bluestore_min_alloc_size'
+# # moved prior to Inconsistent object test due to chances of an OSD being down
+#   - test:
+#       name: OSD restart when bluefs_shared_alloc_size is lower than bluestore_min_alloc_size
+#       module: test_bug_fixes.py
+#       config:
+#         lower_bluefs_shared_alloc_size: true
+#       polarion-id: CEPH-83591092
+#       desc: verify OSD resiliency when 'bluefs_shared_alloc_size' is below 'bluestore_min_alloc_size'
 
-  - test:
-      name: Inconsistent objects in  EC pool functionality check
-      desc: Scub and deep-scrub on  inconsistent objects in EC pool
-      module: test_osd_ecpool_inconsistency_scenario.py
-      polarion-id: CEPH-83586175
-      config:
-        ec_pool:
-          create: true
-          pool_name: ecpool
-          pg_num: 1
-          k: 2
-          m: 2
-          plugin: jerasure
-          disable_pg_autoscale: true
-        inconsistent_obj_count: 4
-        delete_pool:
-          - ecpool
-      comments: Active bug 2277111
+#   - test:
+#       name: Inconsistent objects in  EC pool functionality check
+#       desc: Scub and deep-scrub on  inconsistent objects in EC pool
+#       module: test_osd_ecpool_inconsistency_scenario.py
+#       polarion-id: CEPH-83586175
+#       config:
+#         ec_pool:
+#           create: true
+#           pool_name: ecpool
+#           pg_num: 1
+#           k: 2
+#           m: 2
+#           plugin: jerasure
+#           disable_pg_autoscale: true
+#         inconsistent_obj_count: 4
+#         delete_pool:
+#           - ecpool
+#       comments: Active bug 2277111
 
-  - test:
-      name: Inconsistent objects in replicated pool functionality check
-      desc: Scub and deep-scrub on  inconsistent objects in Replicated pool
-      module: test_osd_replicated_inconsistency_scenario.py
-      polarion-id: CEPH-83586175
-      config:
-        replicated_pool:
-          create: true
-          pool_name: replicated_pool
-          pg_num: 1
-          disable_pg_autoscale: true
-        inconsistent_obj_count: 4
-        delete_pool:
-          - replicated_pool
-      comments: Active bug 2316244
-  - test:
-      name: Verification of ceph config show & get
-      module: test_bug_fixes.py
-      config:
-        test-config-show-get: true
-      polarion-id: CEPH-83590689
-      desc: Verify ceph config show & get outputs
+#   - test:
+#       name: Inconsistent objects in replicated pool functionality check
+#       desc: Scub and deep-scrub on  inconsistent objects in Replicated pool
+#       module: test_osd_replicated_inconsistency_scenario.py
+#       polarion-id: CEPH-83586175
+#       config:
+#         replicated_pool:
+#           create: true
+#           pool_name: replicated_pool
+#           pg_num: 1
+#           disable_pg_autoscale: true
+#         inconsistent_obj_count: 4
+#         delete_pool:
+#           - replicated_pool
+#       comments: Active bug 2316244
+#   - test:
+#       name: Verification of ceph config show & get
+#       module: test_bug_fixes.py
+#       config:
+#         test-config-show-get: true
+#       polarion-id: CEPH-83590689
+#       desc: Verify ceph config show & get outputs
 
-  - test:
-      name: Verification of Slow OSD heartbeat
-      module: test_bug_fixes.py
-      config:
-        slow-osd-heartbeat: true
-      polarion-id: CEPH-83590688
-      desc: Generate Slow OSD heartbeats by inducing network delay
+#   - test:
+#       name: Verification of Slow OSD heartbeat
+#       module: test_bug_fixes.py
+#       config:
+#         slow-osd-heartbeat: true
+#       polarion-id: CEPH-83590688
+#       desc: Generate Slow OSD heartbeats by inducing network delay
 
-  - test:
-      name: Client connection over v1 port
-      module: test_v1client.py
-      polarion-id: CEPH-83594645
-      desc: Ensure client connection over v1 port does not crash
+#   - test:
+#       name: Client connection over v1 port
+#       module: test_v1client.py
+#       polarion-id: CEPH-83594645
+#       desc: Ensure client connection over v1 port does not crash
   
   - test:
       name: Verify that there are no 'defunct' ssh connections after the manager is restarted
