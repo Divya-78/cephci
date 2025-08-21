@@ -52,14 +52,17 @@ import time
 
 import yaml
 
+from ceph.ceph_admin.helper import check_service_exists
 from utility import utils
 from utility.log import Log
 from utility.utils import (
+    configure_kafka_cluster_with_security,
     configure_kafka_security,
     install_start_kafka,
     retain_bucket_pol_at_archive,
     set_config_param,
     setup_cluster_access,
+    setup_gklm_prereq,
     test_bucket_stats_with_archive,
     test_sync_via_bucket_stats,
     test_user_stats_consistency,
@@ -93,6 +96,8 @@ def run(**kw):
     config["git-url"] = config.get(
         "git-url", "https://github.com/red-hat-storage/ceph-qe-scripts.git"
     )
+    test_data = kw.get("test_data")
+    custom_config = test_data.get("custom-config", {})
 
     set_env = config.get("set-env", False)
     extra_pkgs = config.get("extra-pkgs")
@@ -232,6 +237,32 @@ def run(**kw):
         configure_kafka_security(primary_rgw_node, cloud_type)
         configure_kafka_security(secondary_rgw_node, cloud_type)
 
+    configure_kafka_cluster = config.get("configure_kafka_cluster_with_security")
+    if configure_kafka_cluster:
+        configure_kafka_cluster_with_security(primary_cluster, cloud_type)
+        configure_kafka_cluster_with_security(secondary_cluster, cloud_type)
+
+    setup_gklm_prerequisites = config.get("setup_gklm_prerequisites")
+    if setup_gklm_prerequisites:
+        setup_gklm_prereq(primary_cluster, cloud_type, custom_config)
+        rgw_status = check_service_exists(
+            primary_cluster.get_nodes(role="installer")[0],
+            service_type="rgw",
+            interval=10,
+            timeout=180,
+        )
+        if not rgw_status:
+            raise Exception("rgw service restart failed")
+        setup_gklm_prereq(secondary_cluster, cloud_type, custom_config)
+        rgw_status = check_service_exists(
+            secondary_cluster.get_nodes(role="installer")[0],
+            service_type="rgw",
+            interval=10,
+            timeout=180,
+        )
+        if not rgw_status:
+            raise Exception("rgw service restart failed")
+
     if test_config["config"]:
         log.info("creating custom config")
         f_name = test_folder_path + config_dir + config_file_name
@@ -325,7 +356,6 @@ def run(**kw):
 
         verify_io_on_sites = config.get("verify-io-on-site", [])
         if verify_io_on_sites:
-            io_info = home_dir_path + f"io_info_{os.path.basename(config_file_name)}"
             for site in verify_io_on_sites:
                 verify_io_on_site_node = clusters.get(site).get_ceph_object("rgw").node
                 if config.get("multisite-replication-disabled", False):
@@ -338,35 +368,45 @@ def run(**kw):
                 # adding sleep for 80 seconds before verification of data starts
                 log.info("sleeping for 80 seconds before verification of data starts")
                 time.sleep(80)
-                log.info(f"verification IO on {site}")
-                if test_site != site:
-                    copy_file_from_node_to_node(
-                        io_info, exec_from, verify_io_on_site_node, io_info
-                    )
 
-                verify_status = verify_io_on_site_node.exec_command(
-                    cmd="sudo venv/bin/python "
-                    + test_folder_path
-                    + lib_dir
-                    + f"read_io_info.py -c {config_file_name}",
-                    long_running=True,
+                verify_io_info_configs = config.get(
+                    "verify-io-info-configs", [config_file_name]
                 )
-                log.info(f"verify io status code is : {verify_status}")
-                if verify_status != 0:  # Verify io failure on other site
-                    if config.get("multisite-replication-disabled", False):
-                        log.info(
-                            f"Multisite replication disabled. objects not synced to {site}"
-                            + " and verify io failed as expected."
+                for io_config in verify_io_info_configs:
+                    io_info = home_dir_path + f"io_info_{os.path.basename(io_config)}"
+                    log.info(f"verification IO on {site}")
+                    if test_site != site:
+                        copy_file_from_node_to_node(
+                            io_info, exec_from, verify_io_on_site_node, io_info
                         )
-                    else:
-                        raise Exception(f"verify io failed on {site}")
-                else:  # Verify io is successful on other site
-                    if config.get("multisite-replication-disabled", False):
-                        raise Exception(
-                            f"objects synced to {site} even after disabling multisite replication."
-                        )
-                    else:
-                        log.info(f"verify io is successful on {site}")
+
+                    verify_status = verify_io_on_site_node.exec_command(
+                        cmd="sudo venv/bin/python "
+                        + test_folder_path
+                        + lib_dir
+                        + f"read_io_info.py -c {io_config}",
+                        long_running=True,
+                    )
+                    log.info(f"verify io status code is : {verify_status}")
+                    if verify_status != 0:  # Verify io failure on other site
+                        if config.get("multisite-replication-disabled", False):
+                            log.info(
+                                f"Multisite replication disabled. objects not synced to {site}"
+                                + " and verify io failed as expected."
+                            )
+                        else:
+                            raise Exception(
+                                f"verify io failed on {site} for {io_config}"
+                            )
+                    else:  # Verify io is successful on other site
+                        if config.get("multisite-replication-disabled", False):
+                            raise Exception(
+                                f"objects synced to {site} even after disabling multisite replication."
+                            )
+                        else:
+                            log.info(
+                                f"verify io is successful on {site} for {io_config}"
+                            )
 
     return test_status
 

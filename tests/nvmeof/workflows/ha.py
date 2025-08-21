@@ -14,6 +14,7 @@ from ceph.ceph_admin.orch import Orch
 from ceph.parallel import parallel
 from ceph.utils import get_node_by_id, get_openstack_driver
 from ceph.waiter import WaitUntil
+from tests.io.io_utils import get_max_clat_from_fio_output
 from tests.nvmeof.workflows.initiator import NVMeInitiator, validate_initiator
 from tests.nvmeof.workflows.nvme_gateway import NVMeGateway
 from tests.nvmeof.workflows.nvme_utils import deploy_nvme_service
@@ -86,16 +87,14 @@ class HighAvailability:
     def create_dhchap_key(self, config, update_host_key=False):
         """Generate DHCHAP key for each initiator and store it."""
         subnqn = config["subnqn"]
-        group = config["gw_group"]
-        nqn = f"{subnqn}.{group}"
 
         for host_config in config["hosts"]:
             node_id = host_config["node"]
-            initiator = self.get_or_create_initiator(node_id, nqn)
+            initiator = self.get_or_create_initiator(node_id, subnqn)
 
             # Generate key for subsystem NQN
             key, _ = initiator.gen_dhchap_key(n=config["subnqn"])
-            LOG.info(f"{key.strip()} is generated for {nqn} and {node_id}")
+            LOG.info(f"{key.strip()} is generated for {subnqn} and {node_id}")
 
             initiator.nqn = config["subnqn"]
             initiator.auth_mode = config.get("auth_mode")
@@ -739,7 +738,7 @@ class HighAvailability:
 
         return namespaces
 
-    def failover(self, gateway, fail_tool):
+    def failover(self, gateway, fail_tool, namespaces):
         """HA Failover on the NVMeoF Gateways.
 
         Initiate Failover
@@ -752,62 +751,97 @@ class HighAvailability:
         - Check for 5 Consecutive times for the increments in write/read to validate IO continuation.
         """
         hostname = gateway.hostname
-        start_counter = float()
-        start_time = str()
-        end_counter = float()
-        end_time = str()
-
-        # Initiate Failover
-        fail_op = self.fail_ops[fail_tool]
-        LOG.info(f"[ {hostname} ]: Failing Over NVMe Service using {fail_tool} command")
-        res = fail_op(gateway=gateway, action="stop", wait_for_active_state=False)
-        if not res:
-            raise Exception(
-                f"[ {hostname} ]: Error in stopping NVMe Service using {fail_tool} command "
+        initiators = self.config["initiators"]
+        io_tasks = []
+        if len(namespaces) >= 1:
+            max_workers = (
+                len(initiators) * len(namespaces) if initiators else len(namespaces)
+            )  # 20 devices + 10 buffer per initiator
+            executor = ThreadPoolExecutor(
+                max_workers=max_workers,
             )
-        start_counter, start_time = get_current_timestamp()
+        else:
+            executor = ThreadPoolExecutor()
 
-        # Wait until 60 seconds
-        for w in WaitUntil():
-            # Check for gateway unavailability
-            if self.check_gateway_availability(
-                gateway.ana_group_id, state="UNAVAILABLE"
-            ):
-                LOG.info(f"[ {hostname} ] NVMeofGW service is UNAVAILABLE.")
-                active = self.get_optimized_state(gateway.ana_group_id)
+        try:
+            # Start IO Execution
+            for initiator in self.clients:
+                io_tasks.append(executor.submit(initiator.start_fio, "1G"))
+            time.sleep(20)  # time sleep for IO to Kick-in
 
-                # Find optimized path
-                # Condition to fail if multiple Active path exists for a gateway.
-                if active and 1 <= len(active) < 2:
-                    end_counter, end_time = get_current_timestamp()
-                    LOG.info(
-                        f"{list(active[0])} is new and only Active GW for failed {hostname}"
-                    )
-                    break
+            self.validate_io(namespaces)
 
-                if len(active) > 1:
-                    raise Exception(
-                        f"[ {hostname} ] Found more than one Active path - {log_json_dump(active)}"
-                    )
-            LOG.warning(f"[ {hostname} ] is still in AVAILABLE state..")
-
-        if w.expired:
-            raise TimeoutError(
-                f"[ {hostname} ] Failover of NVMeofGW service failed after 60s timeout.."
+            # Initiate Failover
+            fail_op = self.fail_ops[fail_tool]
+            LOG.info(
+                f"[ {hostname} ]: Failing Over NVMe Service using {fail_tool} command"
             )
+            res = fail_op(gateway=gateway, action="stop", wait_for_active_state=False)
+            if not res:
+                raise Exception(
+                    f"[ {hostname} ]: Error in stopping NVMe Service using {fail_tool} command "
+                )
 
-        LOG.info(
-            f"[ {hostname} ] Total time taken to failover - {end_counter - start_counter} seconds"
-        )
-        return {
-            "failover-start-time": start_time,
-            "failover-end-time": end_time,
-            "failover-start-counter-time": start_counter,
-            "failover-end-counter-time": end_counter,
-            "failed-gw": gateway,
-        }
+            # Wait until 60 seconds
+            for w in WaitUntil():
+                # Check for gateway unavailability
+                if self.check_gateway_availability(
+                    gateway.ana_group_id, state="UNAVAILABLE"
+                ):
+                    LOG.info(f"[ {hostname} ] NVMeofGW service is UNAVAILABLE.")
+                    active = self.get_optimized_state(gateway.ana_group_id)
 
-    def failback(self, gateway, fail_tool):
+                    # Find optimized path
+                    # Condition to fail if multiple Active path exists for a gateway.
+                    if active and 1 <= len(active) < 2:
+                        end_counter, end_time = get_current_timestamp()
+                        LOG.info(
+                            f"{list(active[0])} is new and only Active GW for failed {hostname}"
+                        )
+                        break
+
+                    if len(active) > 1:
+                        raise Exception(
+                            f"[ {hostname} ] Found more than one Active path - {log_json_dump(active)}"
+                        )
+                LOG.warning(f"[ {hostname} ] is still in AVAILABLE state..")
+
+            if w.expired:
+                raise TimeoutError(
+                    f"[ {hostname} ] Failover of NVMeofGW service failed after 60s timeout.."
+                )
+            self.validate_io(namespaces)
+
+            return {
+                "failed-gw": gateway,
+            }
+
+        except BaseException as err:  # noqa
+            raise Exception(err)
+
+        finally:
+            # Wait for IO to complete and collect FIO outputs
+            if io_tasks:
+                LOG.info("Waiting for completion of IOs.")
+                executor.shutdown(wait=True, cancel_futures=True)
+                fio_outputs = []
+
+                for task in io_tasks:
+                    try:
+                        fio_outputs.append(task.result())
+                    except Exception as e:
+                        LOG.error(f"FIO execution failed: {e}")
+
+            # Extract failover time
+            for idx, output in enumerate(fio_outputs):
+                try:
+                    max_clat_in_ms = get_max_clat_from_fio_output(output[0][0])
+                    max_clat_in_sec = max_clat_in_ms / 1000
+                    LOG.info(f"Failover time for {max_clat_in_sec} ms")
+                except Exception as e:
+                    LOG.error(f"Failed to parse FIO output: {e}")
+
+    def failback(self, gateway, fail_tool, namespaces):
         """Failback the Gateways.
 
         Args:
@@ -815,64 +849,98 @@ class HighAvailability:
             fail_tool: tool to fail the GW service
         """
         hostname = gateway.hostname
-        start_counter = float()
-        start_time = str()
-        end_counter = float()
-        end_time = str()
+        initiators = self.config["initiators"]
+        io_tasks = []
+        if len(namespaces) >= 1:
+            max_workers = (
+                len(initiators) * len(namespaces) if initiators else len(namespaces)
+            )  # 20 devices + 10 buffer per initiator
+            executor = ThreadPoolExecutor(
+                max_workers=max_workers,
+            )
+        else:
+            executor = ThreadPoolExecutor()
 
         # Initiate Fail-back
         fail_op = self.fail_ops[fail_tool]
         LOG.info(
             f"[ {hostname} ]: Failback / Restore Gateway using {fail_tool} command"
         )
-        res = fail_op(gateway=gateway, action="start", wait_for_active_state=True)
-        if not res:
-            raise Exception(
-                f"[ {hostname} ]: Error in starting NVMe Service using {fail_tool} command "
-            )
-        start_counter, start_time = get_current_timestamp()
+        try:
+            # Start IO Execution
+            for initiator in self.clients:
+                io_tasks.append(executor.submit(initiator.start_fio, "2G"))
+            time.sleep(20)  # time sleep for IO to Kick-in
 
-        for w in WaitUntil():
-            # Check for gateway availability
-            if self.check_gateway_availability(gateway.ana_group_id):
-                LOG.info(f"[ {hostname} ] NVMeofGW service is AVAILABLE.")
+            self.validate_io(namespaces)
 
-                active = self.get_optimized_state(gateway.ana_group_id)
-                if active and 1 <= len(active) < 2:
-                    state = active[0]
+            res = fail_op(gateway=gateway, action="start", wait_for_active_state=True)
+            if not res:
+                raise Exception(
+                    f"[ {hostname} ]: Error in starting NVMe Service using {fail_tool} command "
+                )
 
-                    # check gateway for its own original path.
-                    if gateway.ana_group["name"] in state:
-                        end_counter, end_time = get_current_timestamp()
-                        LOG.info(
-                            f"{hostname} restored to original path - {log_json_dump(state)}"
+            for w in WaitUntil():
+                # Check for gateway availability
+                if self.check_gateway_availability(gateway.ana_group_id):
+                    LOG.info(f"[ {hostname} ] NVMeofGW service is AVAILABLE.")
+
+                    active = self.get_optimized_state(gateway.ana_group_id)
+                    if active and 1 <= len(active) < 2:
+                        state = active[0]
+
+                        # check gateway for its own original path.
+                        if gateway.ana_group["name"] in state:
+                            end_counter, end_time = get_current_timestamp()
+                            LOG.info(
+                                f"{hostname} restored to original path - {log_json_dump(state)}"
+                            )
+                            break
+
+                    if len(active) > 1:
+                        raise Exception(
+                            f"[ {hostname} ] More than one Active path found - {log_json_dump(active)}"
                         )
-                        break
+                    LOG.warning(f"[ {hostname} ] No Active path found")
+                    continue
 
-                if len(active) > 1:
-                    raise Exception(
-                        f"[ {hostname} ] More than one Active path found - {log_json_dump(active)}"
-                    )
-                LOG.warning(f"[ {hostname} ] No Active path found")
+                LOG.warning(f"[ {hostname} ] is still not in AVAILABLE state..")
                 continue
 
-            LOG.warning(f"[ {hostname} ] is still not in AVAILABLE state..")
-            continue
+            if w.expired:
+                raise TimeoutError(
+                    f"[ {hostname} ] Fail-back of NVMeofGW service failed even after 60s timeout.."
+                )
+            self.validate_io(namespaces)
 
-        if w.expired:
-            raise TimeoutError(
-                f"[ {hostname} ] Fail-back of NVMeofGW service failed even after 60s timeout.."
-            )
-        LOG.info(
-            f"[ {hostname} ] Time taken to Failback - {end_counter - start_counter} seconds"
-        )
-        return {
-            "failback-start-time": start_time,
-            "failback-end-time": end_time,
-            "failback-start-counter-time": start_counter,
-            "failback-end-counter-time": end_counter,
-            "failed-gw": gateway,
-        }
+            return {
+                "failed-gw": gateway,
+            }
+
+        except BaseException as err:  # noqa
+            raise Exception(err)
+
+        finally:
+            # Wait for IO to complete and collect FIO outputs
+            if io_tasks:
+                LOG.info("Waiting for completion of IOs.")
+                executor.shutdown(wait=True, cancel_futures=True)
+                fio_outputs = []
+
+                for task in io_tasks:
+                    try:
+                        fio_outputs.append(task.result())
+                    except Exception as e:
+                        LOG.error(f"FIO execution failed: {e}")
+
+            # Extract failback time
+            for idx, output in enumerate(fio_outputs):
+                try:
+                    max_clat_in_ms = get_max_clat_from_fio_output(output[0][0])
+                    max_clat_in_sec = max_clat_in_ms / 1000
+                    LOG.info(f"Failback time for {max_clat_in_sec} ms")
+                except Exception as e:
+                    LOG.error(f"Failed to parse FIO output: {e}")
 
     @retry(IOError, tries=3, delay=3)
     def compare_client_namespace(self, uuids):
@@ -1248,15 +1316,13 @@ class HighAvailability:
 
         else:
             # Validate visibility based on the expected value (for non-add/del host commands)
-            # ns_visibility = str(ns_visibility)
-            LOG.info(command)
-            # if ns_visibility.lower() == expected_visibility.lower():
-            if ns_visibility == expected_visibility:
+            if str(ns_visibility).lower() == str(expected_visibility).lower():
                 LOG.info(
                     f"Validated - Namespace {nsid} has correct visibility: {ns_visibility}"
                 )
+            else:
                 LOG.error(
-                    f"NS {nsid} of {subnqn} has wrong visibility.Expected {expected_visibility} got{ns_visibility}"
+                    f"NS {nsid} of {subnqn} has wrong visibility.Expected {expected_visibility} got {ns_visibility}"
                 )
                 raise Exception(
                     f"NS {nsid} of {subnqn} has wrong visibility.Expected {expected_visibility} got {ns_visibility}"
@@ -1266,22 +1332,17 @@ class HighAvailability:
         """Execute the HA failover and failback with IO validation."""
         fail_methods = self.config["fault-injection-methods"]
         initiators = self.config["initiators"]
-        executor = ThreadPoolExecutor()
-        io_tasks = []
 
         try:
             # Prepare FIO Execution
             namespaces = self.fetch_namespaces(self.gateways[0])
+
             self.prepare_io_execution(initiators)
 
             # Check for targets at clients
             self.compare_client_namespace([i["uuid"] for i in namespaces])
 
             repeat_ha_count = self.config.get("repeat_ha_count", 1)
-            # Start IO Execution
-            for initiator in self.clients:
-                io_tasks.append(executor.submit(initiator.start_fio))
-            time.sleep(20)  # time sleep for IO to Kick-in
 
             # Failover and Failback
             for i in range(0, repeat_ha_count):
@@ -1315,21 +1376,20 @@ class HighAvailability:
                         all_failed_ns.update({gw.ana_group_id: ns_list})
                         validate_initiator(self.clients, gw, ns_list)
 
-                    self.validate_io(namespaces)
-
                     # Fail Over
                     with parallel() as p:
                         for gw in fail_gws:
                             if fail_tool == "daemon_redeploy":
                                 p.spawn(self.daemon_redeploy, gw)
                             else:
-                                p.spawn(self.failover, gw, fail_tool)
+                                p.spawn(self.failover, gw, fail_tool, namespaces)
                         for result in p:
                             if not isinstance(result, dict):
                                 raise Exception("Failover failed")
                             failed_gw = result.pop("failed-gw", None)
                             if not failed_gw:
-                                raise Exception("Faileover failed")
+                                raise Exception("Failover failed")
+
                         for gw in fail_gws:
                             active = self.get_optimized_state(gw.ana_group_id)
                             active_gw = list(active[0])[0]
@@ -1341,7 +1401,7 @@ class HighAvailability:
                             ][0]
                             LOG.info(
                                 f"Active gateway after failover for {gw.node.ip_address} is \
-                                    {active_gw_obj.node.ip_address}"
+                                {active_gw_obj.node.ip_address}"
                             )
                             namespaces_gw = self.fetch_namespaces(
                                 active_gw_obj, [gw.ana_group_id], get_list=True
@@ -1352,13 +1412,12 @@ class HighAvailability:
                                     failover are {ns_list}"
                             )
                             validate_initiator(self.clients, active_gw_obj, ns_list, gw)
-                        self.validate_io(namespaces)
 
                     # Fail Back
                     if fail_tool != "daemon_redeploy":
                         with parallel() as p:
                             for gw in fail_gws:
-                                p.spawn(self.failback, gw, fail_tool)
+                                p.spawn(self.failback, gw, fail_tool, namespaces)
                             for result in p:
                                 if not isinstance(result, dict):
                                     raise Exception("Failback failed")
@@ -1381,7 +1440,3 @@ class HighAvailability:
                         time.sleep(20)
         except BaseException as err:  # noqa
             raise Exception(err)
-        finally:
-            if io_tasks:
-                LOG.info("Waiting for completion of IOs.")
-                executor.shutdown(wait=True, cancel_futures=True)

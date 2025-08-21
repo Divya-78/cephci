@@ -6,9 +6,10 @@ import re
 import string
 import time
 import traceback
-from distutils.version import LooseVersion
 from multiprocessing import Value
 from threading import Thread
+
+from looseversion import LooseVersion
 
 from ceph.ceph import CommandFailed
 from cli.ceph.ceph import Ceph
@@ -247,13 +248,21 @@ def snap_sched_test(snap_req_params):
             out, _ = mnt_client.exec_command(sudo=True, cmd=cmd)
         except CommandFailed as ex:
             log.info(ex)
-            if "No such file or directory" in str(ex):
-                cmd = f"cd {mnt_pt}/.snap/;ls -l ./*"
-                out1, _ = mnt_client.exec_command(sudo=True, cmd=cmd)
-                log.info(out1)
-                cmd = f"ls {mnt_pt}/.snap/_{sv_snap[sv]['snap_list'][0]}*/dd_test_file"
-                out, _ = mnt_client.exec_command(sudo=True, cmd=cmd)
-                log.info(out)
+            retry_exec = retry(CommandFailed, tries=3, delay=20)(
+                mnt_client.exec_command
+            )
+            cmd = f"cd {mnt_pt}/.snap/;ls -l ./*"
+            out1, _ = retry_exec(
+                sudo=True,
+                cmd=cmd,
+            )
+            log.info(out1)
+            cmd = f"ls {mnt_pt}/.snap/_{sv_snap[sv]['snap_list'][0]}*/dd_test_file"
+            out, _ = retry_exec(
+                sudo=True,
+                cmd=cmd,
+            )
+            log.info(out)
         file_path = out.strip()
         cmd = f"dd if={file_path} count=10 bs=1M > read_dd"
         out, rc = mnt_client.exec_command(sudo=True, cmd=cmd)

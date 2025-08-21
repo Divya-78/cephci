@@ -46,15 +46,20 @@ class RadosScrubber(RadosOrchestrator):
         out = super().run_ceph_command(cmd=cmd)
         return out
 
-    def set_osd_configuration(self, param, value):
+    def set_osd_configuration(self, param, value, osd_id=None):
         """
         Used to set the configuration parametrs to the OSD's.
         Args:
-            params : Parameters to be set for OSD's
-
+            param : Parameters to be set for OSD's
+            value : Parameter value
+            osd_id : osd id . The value is none by default
         Returns: 0  for success or 1 for failure
         """
-        cmd = f"ceph config set  osd {param} {value}"
+
+        if osd_id:
+            cmd = f"ceph config set  osd.{osd_id}  {param} {value}"
+        else:
+            cmd = f"ceph config set  osd {param} {value}"
         out, err = self.node.shell([cmd])
         actual_value = self.get_osd_configuration(param)
         if actual_value == value:
@@ -258,3 +263,70 @@ class RadosScrubber(RadosOrchestrator):
             return False
         log.info("Scrubbing completed")
         return True
+
+    def get_scrub_error_count(self):
+        """
+        Method is used to get the scrub error count in the cluster
+        Return:
+            Retuns the scrub error count.If not present returns 0
+
+        """
+        status_out_put = self.run_ceph_command(cmd="ceph -s")
+        if "OSD_SCRUB_ERRORS" not in status_out_put["health"]["checks"]:
+            log.error("The inconsistent objects not created")
+            return 0
+        return status_out_put["health"]["checks"]["OSD_SCRUB_ERRORS"]["summary"][
+            "count"
+        ]
+
+    def get_osd_logs(self, init_time, end_time, osd_id, file_dir_path):
+        """
+        Method to check the scrub and deep-scrub logs exists or not
+        Args:
+            rados_object: Rados object
+            init_time:  initial time
+            end_time:  End time
+            osd_id: osd id number
+            file_dir_path : The user provided file path
+        Returns:
+             log_file_name : File name with full path
+        """
+        fsid = self.run_ceph_command(cmd="ceph fsid")["fsid"]
+        host = self.fetch_host_node(daemon_type="osd", daemon_id=osd_id)
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_file_name = f"{file_dir_path}/osd_{osd_id}_{current_date}.txt"
+        cmd_get_log_lines = (
+            f'awk \'$1 >= "{init_time}" && $1 <= "{end_time}"\' '
+            f"/var/log/ceph/{fsid}/ceph-osd.{osd_id}.log > {log_file_name}"
+        )
+        osd_log_lines, err = host.exec_command(
+            sudo=True,
+            cmd=cmd_get_log_lines,
+        )
+        return log_file_name
+
+    def wait_for_pg_scrub_state(self, pg_id, wait_time):
+        """
+        Method is to wait for a PG  scrub operation to finish
+        Args:
+            rados_obj: Rados object
+            pg_id: pg id
+            wait_time : wait time in minutes
+        Returns: bool: True if scrubbing is not in progress at wait_time, False otherwise.
+
+        """
+        end_time = datetime.datetime.now() + datetime.timedelta(minutes=wait_time)
+        while end_time > datetime.datetime.now():
+            try:
+                pg_state = self.get_pg_state(pg_id=pg_id)
+                if "scrubbing" in pg_state:
+                    log.info("Scrubbing in progress, waiting 5 seconds...")
+                    time.sleep(5)
+                else:
+                    log.info("No scrub operations running.")
+                    return True
+            except Exception as err:
+                log.error(f"PGID : {pg_id} was not found, err: {err}")
+                return False
+        log.info("Timeout reached, scrubbing  still  in progress.")
+        return False
