@@ -56,8 +56,11 @@ class MaintenanceMixin:
             f"ceph-{fsid}-{daemon['daemon_type']}-{daemon['daemon_id'].replace('.', '-')}"
             for daemon in daemons
         ]
-        # you could try daemon["hostname"]
-        retry_count = len(daemons)
+        if not daemon_names:
+            return op == "exit" and status != "maintenance"
+
+        # Allow up to 10 minutes for daemons to converge (20 retries × 30s).
+        retry_count = 20
         count = 0
 
         if op == "enter" and status == "maintenance":
@@ -72,7 +75,7 @@ class MaintenanceMixin:
                 if not containers:
                     active_daemon = False
                     break
-                container_names = [container["Names"] for container in containers]
+                container_names = [container["Names"][0] for container in containers]
                 if any(daemon in container_names for daemon in daemon_names):
                     count += 1
                 else:
@@ -80,7 +83,7 @@ class MaintenanceMixin:
                     break
             return not bool(active_daemon)
         elif op == "exit" and status != "maintenance":
-            inactive_daemon = True
+            daemons_active = False
             while count < retry_count:
                 sleep(30)
                 stdout, stderr = node.exec_command(
@@ -90,19 +93,15 @@ class MaintenanceMixin:
                 containers = loads(container_out) if container_out else list()
                 if not containers:
                     count += 1
-                else:
-                    container_names = [
-                        container["Names"][0] for container in containers
-                    ]
-                    all_containers_exist = all(
-                        daemon in container_names for daemon in daemon_names
-                    )
-                    if not all_containers_exist:
-                        count += 1
-                    else:
-                        inactive_daemon = False
-                        break
-            return not bool(inactive_daemon)
+                    continue
+                container_names = [
+                    container["Names"][0] for container in containers
+                ]
+                if all(daemon in container_names for daemon in daemon_names):
+                    daemons_active = True
+                    break
+                count += 1
+            return daemons_active
 
         return False
 
