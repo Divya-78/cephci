@@ -265,17 +265,17 @@ class CephAdmin(BootstrapMixin, ShellMixin, RegistryLoginMixin):
                 node.exec_command(cmd="rpm -qa | grep ceph")
 
         else:
-            for node in nodes:
-                if self.config["product"] == "ibm":
-                    setup_ibm_licence(node, build_type=None)
+            node = self.installer
+            if self.config["product"] == "ibm":
+                setup_ibm_licence(node, build_type=None)
 
-                node.exec_command(
-                    sudo=True,
-                    cmd=cmd,
-                    long_running=True,
-                )
+            node.exec_command(
+                sudo=True,
+                cmd=cmd,
+                long_running=True,
+            )
 
-                node.exec_command(cmd="rpm -qa | grep cephadm")
+            node.exec_command(cmd="rpm -qa | grep cephadm")
 
     def get_cluster_state(self, commands):
         """Retrieve the state of Ceph Cluster.

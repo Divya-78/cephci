@@ -222,13 +222,18 @@ def install_prereq(
         if repo:
             setup_addition_repo(ceph, repo)
 
-        ceph.exec_command(cmd="sudo yum -y upgrade", timeout=600, check_ec=False)
+        nobest_opt = "--nobest" if distro_ver.startswith("9") else ""
+        ceph.exec_command(
+            cmd=f"sudo yum -y upgrade {nobest_opt}",
+            timeout=600,
+            check_ec=False,
+        )
 
         rpm_all_packages = " ".join(rpm_packages.get("all"))
         if distro_ver.startswith("7"):
             rpm_all_packages = " ".join(rpm_packages.get("7"))
 
-        cmd = f"sudo dnf install --setopt install_weak_deps=False -y {rpm_all_packages}"
+        cmd = f"sudo dnf install --setopt install_weak_deps=False -y {nobest_opt} {rpm_all_packages}"
         ceph.exec_command(cmd=cmd, long_running=True)
 
         # Restarting the node for qdisc filter to be loaded. This is required for

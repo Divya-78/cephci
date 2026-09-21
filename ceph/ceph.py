@@ -2723,6 +2723,10 @@ class CephObject(object):
         self.node = node
 
     @property
+    def shortname(self):
+        return self.node.shortname
+
+    @property
     def pkg_type(self):
         return self.node.pkg_type
 
