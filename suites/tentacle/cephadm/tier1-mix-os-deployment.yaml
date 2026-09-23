@@ -18,14 +18,14 @@ tests:
   - test:
       abort-on-fail: true
       desc: Install software pre-requisites for cluster deployment.
-      module: install_prereq.py
+      module: test_mix_os_prereq.py
       name: setup pre-requisites
 
   - test:
       name: Deploy Ceph 9.x cluster with admin node on rhel 10 and other hosts in rhel 9
       desc: Deploy cluster using cephadm with admin node on rhel 10 and other hosts in rhel 9 with all services.
       polarion-id: CEPH-83575549
-      module: test_cephadm.py
+      module: test_mix_os_deploy.py
       config:
         steps:
           - config:
@@ -85,14 +85,12 @@ tests:
       name: configure client
       desc: Configure the RGW,RBD client system
       polarion-id: CEPH-83575549
-      module: test_client.py
+      module: test_mix_os_client.py
       abort-on-fail: true
       config:
         command: add
         id: client.1
-        nodes:
-            - node5:
-                release: 5
+        node: node5
         install_packages:
           - ceph-common
         copy_admin_keyring: true
